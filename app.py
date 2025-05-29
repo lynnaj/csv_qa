@@ -7,11 +7,13 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_experimental.tools import PythonAstREPLTool
 from langchain_core.output_parsers.openai_tools import JsonOutputKeyToolsParser
 import matplotlib.pyplot as plt
+from langchain.callbacks import StreamlitCallbackHandler
+import statsmodels.api as sm
 
 model_id = "amazon.nova-pro-v1:0"
 
 df_azure = pd.read_csv("AzureUsage.csv")
-df_aws = pd.read_csv("AWSUsage.csv")
+df_aws = pd.read_csv("AWSUsage.csv")[['Services', 'Regions', 'Costs', 'Dates']]
 
 # Initialize BedrockChat model
 llm = init_chat_model(
@@ -21,29 +23,34 @@ llm = init_chat_model(
 )
 
 
-tool = PythonAstREPLTool(locals={"df_aws": df_aws, "df_azure": df_azure})
+tool = PythonAstREPLTool(locals={"df_aws": df_aws, "df_azure": df_azure}, verbose=True)
 
 parser = JsonOutputKeyToolsParser(key_name=tool.name, first_tool_only=True)
 
 llm_with_tool = llm.bind_tools(tools=[tool], tool_choice=tool.name)
 
 df_template = """\`\`\`python
-{df_name}.head().to_markdown()
->>> {df_head}
+str({df_name}.columns.tolist())
+>>> {df_columns}
 \`\`\`"""
 
 df_context = "\n\n".join(
-    df_template.format(df_head=_df.head().to_markdown(), df_name=df_name)
+    df_template.format(df_columns=str(_df.columns.tolist()), df_name=df_name)
     for _df, df_name in [(df_aws, "df_aws"), (df_azure, "df_azure")]
 )
 
-system = f"""You have access to two pandas dataframes. \
-Here is a sample of rows from each dataframe and the python code that was used to generate the sample:
+system = f"""You have access to two datasets about Cloud Spend.  They are loaded as pandas dataframes, df_azure and df_aws. \
+Do not create your own sample datasets. \
+Here is a list of columns for each dataframe and the python code that was used to generate the list:
 {df_context}
-Given a user question about the dataframes, write the Python code to answer it.  Prioritize output the results as a dataframe. Avoid outputing strings.\
-Unless the user ask for a chart or graph, then use matplotlib for streamlit.  Be sure to include import matplotlib.pyplot as plt. \
-Don't assume you have access to any libraries other than built-in Python. To use pandas, please import pandas as pd. \
+Given a user question about the data, write the Python code to answer it.  Prioritize output the results as a dataframe. Avoid outputing strings.\
+Unless the user ask for a chart or graph, then use matplotlib for streamlit. \
+Be sure to include import matplotlib.pyplot as plt and end code with st.pyplot(fig)  \
+Don't assume you have access to any libraries other than built-in Python. To use pandas, please import pandas as pd. To use datetime, please import datetime as dt. \
+To forecast, please import statsmodels.api as sm. Note that disp is no longer support.  Use model.fit()\
 Make sure to refer only to the variables mentioned above."""
+
+#print("system prompt: " + system)
 
 prompt = ChatPromptTemplate.from_messages([("system", system), ("human", "{question}")])
                                            #, MessagesPlaceholder(variable_name="chat_history")])
@@ -62,9 +69,18 @@ st.title("Chat with a dataset")
 #    with st.chat_message(message["role"]):
 #        st.markdown(message["content"], unsafe_allow_html=True)
 
+
+# Initialize chat history
+if "messages" not in st.session_state or st.sidebar.button("Clear conversation history"):
+    st.session_state["messages"] = [{"role": "assistant", "content": "How can I help you?"}]
+
+# Display chat messages from history on app rerun
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
+    
 # Accept user input
-query = st.chat_input("Ask me about any of the Cloud Spend Datasets")
-if query:
+if query := st.chat_input("Ask me about any of the Cloud Spend Datasets"):
+    st.session_state.messages.append({"role": "user", "content": query})
     # Display user message in chat message container
     with st.chat_message("user"):
         st.markdown(query, unsafe_allow_html=True)
@@ -73,7 +89,8 @@ if query:
 
     # Display assistant response in chat message container
     with st.chat_message("assistant"):
-        response = chain.invoke({"question": query, })#"chat_history": st.session_state.messages})
+        st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
+        response = chain.invoke({"question": query, }, {"callbacks":[st_cb]}) #"chat_history": st.session_state.messages})
         print("TYPE: " + str(type(response)))
         if isinstance(response, str):
             try:
@@ -85,9 +102,3 @@ if query:
             response = st.write(response)
     # Add assistant response to chat history
     #st.session_state.messages.append({"role": "assistant", "content": response})
-
-    # Display assistant response in chat message container
-    with st.chat_message("assistant"):
-        response = st.write_stream(response_generator())
-    # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": response})
