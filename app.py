@@ -14,6 +14,11 @@ model_id = "amazon.nova-pro-v1:0"
 
 df_azure = pd.read_csv("AzureUsage.csv")
 df_aws = pd.read_csv("AWSUsage.csv")[['Services', 'Regions', 'Costs', 'Dates']]
+df_aws['Dates'] = pd.to_datetime(df_aws['Dates'])
+df_azure['Date'] = pd.to_datetime(df_azure['Date'])
+
+ls_aws_services = df_aws['Services'].unique().tolist()
+ls_azure_services = df_azure['ServiceName'].unique().tolist()
 
 # Initialize BedrockChat model
 llm = init_chat_model(
@@ -23,7 +28,7 @@ llm = init_chat_model(
 )
 
 
-tool = PythonAstREPLTool(locals={"df_aws": df_aws, "df_azure": df_azure}, verbose=True)
+tool = PythonAstREPLTool(locals={"df_aws": df_aws, "df_azure": df_azure})
 
 parser = JsonOutputKeyToolsParser(key_name=tool.name, first_tool_only=True)
 
@@ -42,21 +47,21 @@ df_context = "\n\n".join(
 system = f"""You have access to two datasets about Cloud Spend.  They are loaded as pandas dataframes, df_azure and df_aws. \
 Do not create your own sample datasets. \
 Here is a list of columns for each dataframe and the python code that was used to generate the list:
-{df_context}
+{df_context} \
+Here is a list of AWS services: {ls_aws_services} \
+Here is a list of Azure services: {ls_azure_services} \
 Given a user question about the data, write the Python code to answer it.  Prioritize output the results as a dataframe. Avoid outputing strings.\
 Unless the user ask for a chart or graph, then use matplotlib for streamlit. \
 Be sure to include import matplotlib.pyplot as plt and end code with st.pyplot(fig)  \
-Don't assume you have access to any libraries other than built-in Python. To use pandas, please import pandas as pd. To use datetime, please import datetime as dt. \
+Don't assume you have access to any libraries other than built-in Python. To use pandas, please import pandas as pd. When aggregating over time, be sure to pass numeric_only=True . \
+For example, here is pandas code for aggregating spend by month over month: df_aws['Costs'].groupby(df_aws['Dates'].dt.to_period('M')).sum(numeric_only=True).reset_index()
 To forecast, please import statsmodels.api as sm. Note that disp is no longer support.  Use model.fit()\
 Make sure to refer only to the variables mentioned above."""
-
-#print("system prompt: " + system)
 
 prompt = ChatPromptTemplate.from_messages([("system", system), ("human", "{question}")])
                                            #, MessagesPlaceholder(variable_name="chat_history")])
 
 chain = prompt | llm_with_tool | parser | tool
-
 
 st.title("Chat with a dataset")
 
@@ -68,7 +73,6 @@ st.title("Chat with a dataset")
 #for message in st.session_state.messages:
 #    with st.chat_message(message["role"]):
 #        st.markdown(message["content"], unsafe_allow_html=True)
-
 
 # Initialize chat history
 if "messages" not in st.session_state or st.sidebar.button("Clear conversation history"):
@@ -83,14 +87,14 @@ if query := st.chat_input("Ask me about any of the Cloud Spend Datasets"):
     st.session_state.messages.append({"role": "user", "content": query})
     # Display user message in chat message container
     with st.chat_message("user"):
-        st.markdown(query, unsafe_allow_html=True)
+        st.write(query, unsafe_allow_html=True)
     # Add user message to chat history
     #st.session_state.messages.append({"role": "user", "content": query})
 
     # Display assistant response in chat message container
     with st.chat_message("assistant"):
         st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
-        response = chain.invoke({"question": query, }, {"callbacks":[st_cb]}) #"chat_history": st.session_state.messages})
+        response = chain.invoke({"question": query, }, config={"verbose": True, "callbacks":[st_cb]}) #"chat_history": st.session_state.messages})
         print("TYPE: " + str(type(response)))
         if isinstance(response, str):
             try:
