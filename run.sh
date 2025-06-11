@@ -10,6 +10,10 @@ echo "**************************************************************************
 echo "*** If you are NOT on Amazon SageMaker Studio Classic use 'bash run.sh' ***"
 echo "***************************************************************************"
 
+# installs
+pip install streamlit
+pip install -q langchain==0.3.22 langchain-aws==0.2.18 langchain-community==0.3.20 langchain-core==0.3.49 langchain-experimental==0.3.4 langgraph
+
 # Run the Streamlit app and save the output to "temp.txt"
 streamlit run app.py > temp.txt & 
 
